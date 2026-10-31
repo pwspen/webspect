@@ -393,8 +393,8 @@ class SpectrogramView {
     const sourceY = BINS - 0.5 - sourceHeight;
     const scale = plotWidth / model.columns;
     const older = model.columns - head;
-    context.imageSmoothingEnabled = true;
-    context.imageSmoothingQuality = "high";
+    // Each bin stays a hard block: smoothing would blur frequency detail when zoomed in.
+    context.imageSmoothingEnabled = false;
     // Joining on a device pixel keeps the two slices from showing a hairline between them.
     const split = Math.round((PLOT.left + older * scale) * ratio) / ratio;
     context.drawImage(this.image, head, sourceY, older, sourceHeight,
