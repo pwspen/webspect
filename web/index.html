@@ -195,6 +195,11 @@ canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%
         <input id="top" type="range" min="1000" max="24000" step="500" value="20000">
         <output id="top-value" for="top">20 kHz</output>
       </div>
+      <div class="knob" title="Bends the frequency axis from linear towards log. The value is the corner: below it the axis is nearly linear, above it nearly log. 700 Hz is the mel scale. Double-click to reset.">
+        <label for="warp">Warp</label>
+        <input id="warp" type="range" min="0" max="1" step="0.01" value="0">
+        <output id="warp-value" for="warp">Linear</output>
+      </div>
     </div>
   </header>
 

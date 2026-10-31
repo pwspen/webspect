@@ -8,6 +8,34 @@ const BINS = FFT_SIZE / 2 + 1;
 const FLOOR_AMPLITUDE = 10 ** (FLOOR_DB / 20);
 const CURVE_SIZE = 4096;
 
+// Frequency warp, from the mel family: log(1 + f / corner). Far below the corner it is linear,
+// far above it logarithmic, and an infinite corner is exactly linear. Corner 700 Hz gives mel.
+// A log base would do nothing here: fitting the axis to the plot cancels it.
+function warpPosition(frequency, top, corner) {
+  if (!Number.isFinite(corner)) return frequency / top;
+  return Math.log1p(frequency / corner) / Math.log1p(top / corner);
+}
+
+function warpFrequency(position, top, corner) {
+  if (!Number.isFinite(corner)) return position * top;
+  return corner * Math.expm1(position * Math.log1p(top / corner));
+}
+
+// The bins behind each plot row, top row first. Rows share a bin when zoomed in and pool
+// several when zoomed out, so every visible bin lands in exactly one row or more.
+function rowBins(rows, top, corner, binWidth) {
+  const first = new Uint16Array(rows);
+  const last = new Uint16Array(rows);
+  for (let row = 0; row < rows; row += 1) {
+    const low = warpFrequency((rows - row - 1) / rows, top, corner);
+    const high = warpFrequency((rows - row) / rows, top, corner);
+    first[row] = Math.min(Math.round(low / binWidth), BINS - 1);
+    const end = Math.round(high / binWidth) - (row === 0 ? 0 : 1);
+    last[row] = Math.min(Math.max(first[row], end), BINS - 1);
+  }
+  return { first, last };
+}
+
 // The histogram and curve index levels in fine steps from the floor to full scale.
 function curveStep(level) {
   return Math.round(Math.min(Math.max((level - FLOOR_DB) / -FLOOR_DB, 0), 1) * (CURVE_SIZE - 1));
@@ -174,6 +202,7 @@ function reverseBits(value, bits) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    Spectrogram, curveStep, sharpnessCurve, FLOOR_DB, FFT_SIZE, HOP_SIZE, BINS, CURVE_SIZE,
+    Spectrogram, curveStep, sharpnessCurve, warpPosition, warpFrequency, rowBins,
+    FLOOR_DB, FFT_SIZE, HOP_SIZE, BINS, CURVE_SIZE,
   };
 }

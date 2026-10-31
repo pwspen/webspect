@@ -14,6 +14,9 @@ const COLORMAPS = {
 const DEFAULT_COLORMAP = "Magma";
 const COLORMAP_KEY = "audiovis.colormap";
 const SHARPNESS_KEY = "audiovis.sharpness";
+const WARP_KEY = "audiovis.warp";
+const CORNER_MIN = 20;
+const CORNER_MAX = 200000;
 const MEASURE_INTERVAL_MS = 250;
 const MEASURE_BUDGET = 20;
 const RAMP_STOPS = 17;
@@ -59,7 +62,7 @@ registerProcessor("block-tap", BlockTap);
 `;
 
 const elements = Object.fromEntries(
-  ["resolution", "source", "seconds", "seconds-value", "top", "top-value", "colormap", "sharpness", "sharpness-value", "start", "stop", "plot", "prompt", "prompt-title",
+  ["resolution", "source", "seconds", "seconds-value", "top", "top-value", "colormap", "sharpness", "sharpness-value", "warp", "warp-value", "start", "stop", "plot", "prompt", "prompt-title",
     "prompt-detail", "status", "ramp", "setup", "setup-os", "setup-browser", "guide"]
     .map((id) => [id, document.getElementById(id)]),
 );
@@ -282,7 +285,7 @@ function buildPalette(colors) {
 
 function formatFrequency(hertz) {
   if (hertz === 0) return "0 Hz";
-  return hertz >= 1000 ? `${Number((hertz / 1000).toFixed(2))} kHz` : `${hertz} Hz`;
+  return hertz >= 1000 ? `${Number((hertz / 1000).toFixed(2))} kHz` : `${Math.round(hertz)} Hz`;
 }
 
 class SpectrogramView {
@@ -299,7 +302,12 @@ class SpectrogramView {
     this.ink = "#ffffff";
     this.image = document.createElement("canvas");
     this.imageContext = this.image.getContext("2d");
-    this.strip = new ImageData(1, BINS);
+    this.corner = Infinity;
+    this.rows = 1;
+    this.first = new Uint16Array(1);
+    this.last = new Uint16Array(1);
+    this.arrangement = "";
+    this.strip = new ImageData(1, 1);
     this.drawn = 0;
     this.dirty = true;
     new ResizeObserver(() => this.resize()).observe(canvas);
@@ -317,11 +325,29 @@ class SpectrogramView {
     this.dirty = true;
   }
 
+  get pixelRatio() {
+    return this.canvas.clientWidth ? this.canvas.width / this.canvas.clientWidth : 1;
+  }
+
+  // The warp can't be drawn by stretching an image, so the image holds one row per device
+  // pixel of the plot, and any change to the layout rebuilds it.
+  arrange(model, top) {
+    const plotHeight = this.canvas.clientHeight - PLOT.top - PLOT.bottom;
+    const rows = Math.max(1, Math.round(plotHeight * this.pixelRatio));
+    const arrangement = [rows, top, this.corner, model.sampleRate].join();
+    if (arrangement === this.arrangement) return;
+    this.arrangement = arrangement;
+    this.rows = rows;
+    ({ first: this.first, last: this.last } = rowBins(rows, top, this.corner, model.sampleRate / FFT_SIZE));
+    this.strip = new ImageData(1, rows);
+    this.clear(model);
+  }
+
   clear(model) {
     this.image.width = model.columns;
-    this.image.height = BINS;
+    this.image.height = this.rows;
     this.imageContext.fillStyle = cssColor(this.palette.subarray(0, 3));
-    this.imageContext.fillRect(0, 0, model.columns, BINS);
+    this.imageContext.fillRect(0, 0, model.columns, this.rows);
     this.drawn = 0;
     this.dirty = true;
     this.stale = true;
@@ -329,17 +355,16 @@ class SpectrogramView {
 
   // Exposure follows what is on screen, which means recoloring the whole history. Each pass
   // sets the wait for the next one, so a long history can't take over the frame.
-  remeasure(model, top) {
+  remeasure(model) {
     const started = performance.now();
     const due = this.sharpness !== 1 && model.total !== this.measured && started >= this.nextMeasure;
     if (!this.stale && !due) return;
     this.histogram.fill(0);
-    const visibleBins = Math.min(BINS, Math.floor(top / (model.sampleRate / FFT_SIZE)) + 1);
     const count = Math.min(model.total, model.columns);
     for (let age = 0; age < count; age += 1) {
       const levels = model.column(model.total - count + age);
-      for (let bin = 0; bin < visibleBins; bin += 1) {
-        this.histogram[curveStep(levels[bin])] += 1;
+      for (let row = 0; row < this.rows; row += 1) {
+        this.histogram[curveStep(this.rowLevel(levels, row))] += 1;
       }
     }
     this.curve = sharpnessCurve(this.histogram, this.sharpness);
@@ -352,12 +377,22 @@ class SpectrogramView {
     this.nextMeasure = started + Math.max(MEASURE_INTERVAL_MS, elapsed * MEASURE_BUDGET);
   }
 
+  // The loudest bin wins, so thin peaks survive when a row pools several bins.
+  rowLevel(levels, row) {
+    const last = this.last[row];
+    let level = levels[this.first[row]];
+    for (let bin = this.first[row] + 1; bin <= last; bin += 1) {
+      if (levels[bin] > level) level = levels[bin];
+    }
+    return level;
+  }
+
   writeColumn(model, index) {
     const levels = model.column(index);
     const pixels = this.strip.data;
-    for (let bin = 0; bin < BINS; bin += 1) {
-      const level = this.curve[curveStep(levels[bin])];
-      const offset = (BINS - 1 - bin) * 4;
+    for (let row = 0; row < this.rows; row += 1) {
+      const level = this.curve[curveStep(this.rowLevel(levels, row))];
+      const offset = row * 4;
       pixels[offset] = this.palette[level * 3];
       pixels[offset + 1] = this.palette[level * 3 + 1];
       pixels[offset + 2] = this.palette[level * 3 + 2];
@@ -369,7 +404,8 @@ class SpectrogramView {
   render(model, topFrequency) {
     if (model.total < this.drawn) this.clear(model);
     const top = Math.min(topFrequency, model.sampleRate / 2);
-    this.remeasure(model, top);
+    this.arrange(model, top);
+    this.remeasure(model);
     if (model.total === this.drawn && !this.dirty) return;
     for (let index = Math.max(this.drawn, model.total - model.columns); index < model.total; index += 1) {
       this.writeColumn(model, index);
@@ -377,7 +413,7 @@ class SpectrogramView {
     this.drawn = model.total;
     this.dirty = false;
 
-    const ratio = this.canvas.width / this.canvas.clientWidth || 1;
+    const ratio = this.pixelRatio;
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
     const plotWidth = width - PLOT.left - PLOT.right;
@@ -388,19 +424,16 @@ class SpectrogramView {
 
     // The history is a ring: the oldest column sits just right of the write position.
     const head = model.total % model.columns;
-    const binWidth = model.sampleRate / FFT_SIZE;
-    const sourceHeight = top / binWidth;
-    const sourceY = BINS - 0.5 - sourceHeight;
     const scale = plotWidth / model.columns;
     const older = model.columns - head;
     // Each bin stays a hard block: smoothing would blur frequency detail when zoomed in.
     context.imageSmoothingEnabled = false;
     // Joining on a device pixel keeps the two slices from showing a hairline between them.
     const split = Math.round((PLOT.left + older * scale) * ratio) / ratio;
-    context.drawImage(this.image, head, sourceY, older, sourceHeight,
+    context.drawImage(this.image, head, 0, older, this.rows,
       PLOT.left, PLOT.top, split - PLOT.left, plotHeight);
     if (head > 0) {
-      context.drawImage(this.image, 0, sourceY, head, sourceHeight,
+      context.drawImage(this.image, 0, 0, head, this.rows,
         split, PLOT.top, PLOT.left + plotWidth - split, plotHeight);
     }
 
@@ -411,10 +444,10 @@ class SpectrogramView {
 
     context.textAlign = "right";
     context.textBaseline = "middle";
-    for (const frequency of [top, top / 2, 0]) {
-      const y = PLOT.top + plotHeight * (1 - frequency / top);
+    for (const position of [1, 0.5, 0]) {
+      const y = PLOT.top + plotHeight * (1 - position);
       this.tick(PLOT.left - 5, y, PLOT.left, y);
-      context.fillText(formatFrequency(frequency), PLOT.left - 8, y);
+      context.fillText(formatFrequency(warpFrequency(position, top, this.corner)), PLOT.left - 8, y);
     }
 
     context.textBaseline = "top";
@@ -497,6 +530,16 @@ function renderRamp() {
     return cssColor(view.palette.subarray(level * 3, level * 3 + 3));
   });
   document.documentElement.style.setProperty("--ramp", `linear-gradient(to right, ${stops.join(", ")})`);
+}
+
+// The slider moves the corner down in equal ratios, so 0 is linear and each step bends as much
+// as the last. The view rebuilds itself when it sees the new corner.
+function applyWarp() {
+  const position = Number(elements.warp.value);
+  view.corner = position === 0 ? Infinity : CORNER_MAX * (CORNER_MIN / CORNER_MAX) ** position;
+  elements["warp-value"].textContent = position === 0
+    ? "Linear"
+    : formatFrequency(Number(view.corner.toPrecision(2)));
 }
 
 function showRanges() {
@@ -848,6 +891,15 @@ elements.stop.addEventListener("click", () => stopCapture());
 elements.source.addEventListener("change", () => {
   if (capture) startCapture();
 });
+elements.warp.addEventListener("input", () => {
+  applyWarp();
+  saveSetting(WARP_KEY, elements.warp.value);
+});
+elements.warp.addEventListener("dblclick", () => {
+  elements.warp.value = 0;
+  applyWarp();
+  saveSetting(WARP_KEY, elements.warp.value);
+});
 elements.seconds.addEventListener("input", () => {
   model = model.resized(Number(elements.seconds.value));
   view.clear(model);
@@ -889,6 +941,8 @@ elements.colormap.value = Object.hasOwn(COLORMAPS, savedColormap) ? savedColorma
 applyColormap(elements.colormap.value);
 elements.sharpness.value = readSetting(SHARPNESS_KEY) ?? 0;
 applySharpness();
+elements.warp.value = readSetting(WARP_KEY) ?? 0;
+applyWarp();
 elements["setup-os"].value = platform.os;
 elements["setup-browser"].value = platform.browser;
 elements["prompt-detail"].textContent = canShareAudio
