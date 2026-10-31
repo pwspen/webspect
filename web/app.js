@@ -15,9 +15,10 @@ const DEFAULT_COLORMAP = "Magma";
 const COLORMAP_KEY = "audiovis.colormap";
 const GAMMA_KEY = "audiovis.gamma";
 const RAMP_STOPS = 17;
-const PLOT = { left: 52, right: 0, top: 0, bottom: 24 };
-const TICK_HERTZ = 10000;
-const TICK_SECONDS = 1;
+const SECONDS_KEY = "audiovis.seconds";
+const TOP_KEY = "audiovis.top";
+const PLOT = { left: 58, right: 0, top: 8, bottom: 24 };
+const MIN_LABEL_GAP = 38;
 const LOOPBACK = /blackhole|soundflower|loopback|monitor of|stereo mix|what u hear|cable output|vb-audio|computer audio/i;
 const SHARED_DEVICE_IDS = new Set(["default", "communications"]);
 const CAPTURE_RATE = 48000;
@@ -56,7 +57,7 @@ registerProcessor("block-tap", BlockTap);
 `;
 
 const elements = Object.fromEntries(
-  ["source", "seconds", "top", "colormap", "gamma", "gamma-value", "start", "stop", "plot", "prompt", "prompt-title",
+  ["source", "seconds", "seconds-value", "top", "top-value", "colormap", "gamma", "gamma-value", "start", "stop", "plot", "prompt", "prompt-title",
     "prompt-detail", "status", "ramp", "setup", "setup-os", "setup-browser", "guide"]
     .map((id) => [id, document.getElementById(id)]),
 );
@@ -277,6 +278,11 @@ function buildPalette(colors) {
   return palette;
 }
 
+function formatFrequency(hertz) {
+  if (hertz === 0) return "0 Hz";
+  return hertz >= 1000 ? `${Number((hertz / 1000).toFixed(2))} kHz` : `${hertz} Hz`;
+}
+
 class SpectrogramView {
   constructor(canvas) {
     this.canvas = canvas;
@@ -369,20 +375,26 @@ class SpectrogramView {
     context.strokeStyle = this.ink;
     context.lineWidth = 1;
 
-    if (TICK_HERTZ <= top) {
-      const y = PLOT.top + plotHeight * (1 - TICK_HERTZ / top);
-      context.textAlign = "right";
-      context.textBaseline = "middle";
+    context.textAlign = "right";
+    context.textBaseline = "middle";
+    for (const frequency of [top, top / 2, 0]) {
+      const y = PLOT.top + plotHeight * (1 - frequency / top);
       this.tick(PLOT.left - 5, y, PLOT.left, y);
-      context.fillText(`${TICK_HERTZ / 1000} kHz`, PLOT.left - 8, y);
+      context.fillText(formatFrequency(frequency), PLOT.left - 8, y);
     }
-    if (TICK_SECONDS <= model.duration) {
-      const x = PLOT.left + plotWidth * (1 - TICK_SECONDS / model.duration);
-      const y = PLOT.top + plotHeight;
-      context.textAlign = "center";
-      context.textBaseline = "top";
-      this.tick(x, y, x, y + 5);
-      context.fillText(`−${TICK_SECONDS} s`, x, y + 8);
+
+    context.textBaseline = "top";
+    const baseline = PLOT.top + plotHeight;
+    const seconds = model.seconds;
+    const zeroX = width - 1;
+    for (const age of new Set([seconds, seconds / 2, 1, 0])) {
+      const x = Math.min(PLOT.left + plotWidth * (1 - age / model.duration), zeroX);
+      this.tick(x, baseline, x, baseline + 5);
+      // On a long history the 1 s tick lands too close to 0 s for two labels to fit.
+      if (age !== 0 && zeroX - x < MIN_LABEL_GAP) continue;
+      context.textAlign = age === 0 ? "right" : "center";
+      const labelX = age === 0 ? x - 4 : x;
+      context.fillText(age === 0 ? "0 s" : `−${Number(age.toFixed(1))} s`, labelX, baseline + 8);
     }
   }
 
@@ -453,6 +465,11 @@ function renderRamp() {
     return cssColor(view.palette.subarray(level * 3, level * 3 + 3));
   });
   document.documentElement.style.setProperty("--ramp", `linear-gradient(to right, ${stops.join(", ")})`);
+}
+
+function showRanges() {
+  elements["seconds-value"].textContent = `${elements.seconds.value} s`;
+  elements["top-value"].textContent = formatFrequency(Number(elements.top.value));
 }
 
 function readSetting(key) {
@@ -607,6 +624,8 @@ async function startCapture() {
   model = new Spectrogram(next.sampleRate, Number(elements.seconds.value));
   expectedFrame = null;
   view.clear(model);
+  elements.top.max = next.sampleRate / 2;
+  showRanges();
   silentSamples = 0;
   showingSilence = false;
   setRunning(true);
@@ -785,12 +804,17 @@ elements.stop.addEventListener("click", () => stopCapture());
 elements.source.addEventListener("change", () => {
   if (capture) startCapture();
 });
-elements.seconds.addEventListener("change", () => {
-  model = new Spectrogram(capture?.context ? capture.sampleRate : model.sampleRate, Number(elements.seconds.value));
-  expectedFrame = null;
+elements.seconds.addEventListener("input", () => {
+  model = model.resized(Number(elements.seconds.value));
   view.clear(model);
+  showRanges();
+  saveSetting(SECONDS_KEY, elements.seconds.value);
 });
-elements.top.addEventListener("change", () => { view.dirty = true; });
+elements.top.addEventListener("input", () => {
+  view.dirty = true;
+  showRanges();
+  saveSetting(TOP_KEY, elements.top.value);
+});
 elements.colormap.addEventListener("change", () => {
   applyColormap(elements.colormap.value);
   saveSetting(COLORMAP_KEY, elements.colormap.value);
@@ -809,6 +833,10 @@ elements["setup-browser"].addEventListener("change", renderGuide);
 navigator.mediaDevices?.addEventListener?.("devicechange", refreshDevices);
 
 elements.colormap.replaceChildren(...Object.keys(COLORMAPS).map((name) => new Option(name, name)));
+elements.seconds.value = readSetting(SECONDS_KEY) ?? elements.seconds.value;
+elements.top.value = readSetting(TOP_KEY) ?? elements.top.value;
+model = model.resized(Number(elements.seconds.value));
+showRanges();
 const savedColormap = readSetting(COLORMAP_KEY);
 elements.colormap.value = Object.hasOwn(COLORMAPS, savedColormap) ? savedColormap : DEFAULT_COLORMAP;
 applyColormap(elements.colormap.value);

@@ -119,6 +119,19 @@ class Spectrogram {
     return this.history.subarray(start, start + BINS);
   }
 
+  // A copy with a different history length, keeping the newest columns and unfinished audio.
+  resized(seconds) {
+    const next = new Spectrogram(this.sampleRate, seconds);
+    const count = Math.min(this.total, this.columns, next.columns);
+    for (let age = 0; age < count; age += 1) {
+      next.history.set(this.column(this.total - count + age), age * BINS);
+    }
+    next.total = count;
+    next.pending.set(this.pending);
+    next.pendingSize = this.pendingSize;
+    return next;
+  }
+
   // Discard history when capture skips samples; never splice across a gap.
   reset() {
     this.pendingSize = 0;

@@ -72,9 +72,18 @@ button:disabled { opacity: 0.4; cursor: default; }
 button.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 .push { margin-left: auto; }
-.knob { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
-.knob input { width: 96px; margin: 0; accent-color: var(--accent); }
-.knob output { min-width: 2.2em; color: var(--fg); font-variant-numeric: tabular-nums; }
+/* Fixed columns keep the sliders lined up in a row or stacked. */
+.knobs { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.knob {
+  display: grid;
+  grid-template-columns: 3.4em 88px 3.9em;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.knob input { width: 100%; margin: 0; accent-color: var(--accent); }
+.knob output { color: var(--fg); font-variant-numeric: tabular-nums; text-align: right; }
 :is(select, button, input, a, code):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .plot { position: relative; flex: 1; min-height: 0; }
@@ -85,7 +94,7 @@ canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%
   display: grid;
   place-content: center;
   text-align: center;
-  padding: 16px 16px 40px 68px;
+  padding: 16px 16px 40px 74px;
   color: var(--muted);
   pointer-events: none;
 }
@@ -164,33 +173,26 @@ canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%
     </div>
     <button id="start" class="primary" type="button">Start</button>
     <button id="stop" type="button" disabled>Stop</button>
-    <div class="knob push" title="Lower lifts quiet detail, higher keeps only the strongest sound. Double-click to reset.">
-      <label for="gamma">Gamma</label>
-      <input id="gamma" type="range" min="-2" max="2" step="0.05" value="0">
-      <output id="gamma-value" for="gamma">1.00</output>
-    </div>
-    <div class="field">
+    <div class="field push">
       <label class="sr-only" for="colormap">Colormap</label>
       <select id="colormap" title="Colormap"></select>
     </div>
-    <div class="field">
-      <label class="sr-only" for="seconds">History</label>
-      <select id="seconds" title="History">
-        <option value="5">5 s</option>
-        <option value="10" selected>10 s</option>
-        <option value="20">20 s</option>
-        <option value="30">30 s</option>
-      </select>
-    </div>
-    <div class="field">
-      <label class="sr-only" for="top">Top frequency</label>
-      <select id="top" title="Top frequency">
-        <option value="4000">4 kHz</option>
-        <option value="8000">8 kHz</option>
-        <option value="12000">12 kHz</option>
-        <option value="20000" selected>20 kHz</option>
-        <option value="Infinity">Maximum</option>
-      </select>
+    <div class="knobs">
+      <div class="knob" title="Lower lifts quiet detail, higher keeps only the strongest sound. Double-click to reset.">
+        <label for="gamma">Gamma</label>
+        <input id="gamma" type="range" min="-2" max="2" step="0.05" value="0">
+        <output id="gamma-value" for="gamma">1.00</output>
+      </div>
+      <div class="knob" title="How much history the plot shows.">
+        <label for="seconds">Time</label>
+        <input id="seconds" type="range" min="2" max="60" step="1" value="10">
+        <output id="seconds-value" for="seconds">10 s</output>
+      </div>
+      <div class="knob" title="The highest frequency shown.">
+        <label for="top">Freq</label>
+        <input id="top" type="range" min="1000" max="24000" step="500" value="20000">
+        <output id="top-value" for="top">20 kHz</output>
+      </div>
     </div>
   </header>
 
