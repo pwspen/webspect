@@ -7,6 +7,7 @@ const VIRIDIS = [
 const PLOT = { left: 62, right: 86, top: 10, bottom: 36, bar: 14 };
 const LOOPBACK = /blackhole|soundflower|loopback|monitor of|stereo mix|what u hear|cable output|vb-audio|computer audio/i;
 const SHARED_DEVICE_IDS = new Set(["default", "communications"]);
+const CAPTURE_RATE = 48000;
 const SILENCE_LEVEL = 1e-5;
 const SILENCE_SECONDS = 3;
 
@@ -138,8 +139,9 @@ class AudioCapture {
   }
 
   async start() {
-    // Safari only lets a context run if it is created during the click.
-    this.context = new AudioContext();
+    // Safari only lets a context run if it is created during the click. A fixed rate keeps
+    // the display at full range when Bluetooth headphones drop to 16 kHz for a call.
+    this.context = new AudioContext({ sampleRate: CAPTURE_RATE });
     this.context.resume();
     let nodes;
     if (this.source.kind === "test") {
@@ -170,12 +172,10 @@ class AudioCapture {
   streamSource() {
     try {
       return this.context.createMediaStreamSource(this.stream);
-    } catch (error) {
-      // Firefox refuses a device whose rate differs from the context's, such as a headset mic.
-      const rate = this.stream.getAudioTracks()[0].getSettings().sampleRate;
-      if (!rate || rate === this.context.sampleRate) throw error;
+    } catch {
+      // Some browsers refuse a stream at another rate, so fall back to the system's.
       this.context.close();
-      this.context = new AudioContext({ sampleRate: rate });
+      this.context = new AudioContext();
       return this.context.createMediaStreamSource(this.stream);
     }
   }
