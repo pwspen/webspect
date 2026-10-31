@@ -6,6 +6,17 @@ const FFT_SIZE = 2048;
 const HOP_SIZE = 512;
 const BINS = FFT_SIZE / 2 + 1;
 const FLOOR_AMPLITUDE = 10 ** (FLOOR_DB / 20);
+const CURVE_SIZE = 4096;
+
+// Maps a level from 0 to 1 onto a palette index. Below 1 lifts quiet detail; above 1 sinks it.
+// Fine steps keep a low gamma from jumping away from the floor color.
+function gammaCurve(gamma) {
+  const curve = new Uint8Array(CURVE_SIZE);
+  for (let step = 0; step < CURVE_SIZE; step += 1) {
+    curve[step] = Math.round((step / (CURVE_SIZE - 1)) ** gamma * 255);
+  }
+  return curve;
+}
 
 // Overlapping Hann-window FFTs, normalized to peak amplitude in dBFS.
 class Spectrogram {
@@ -125,5 +136,5 @@ function reverseBits(value, bits) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { Spectrogram, FLOOR_DB, FFT_SIZE, HOP_SIZE, BINS };
+  module.exports = { Spectrogram, gammaCurve, FLOOR_DB, FFT_SIZE, HOP_SIZE, BINS, CURVE_SIZE };
 }

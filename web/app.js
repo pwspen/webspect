@@ -13,6 +13,8 @@ const COLORMAPS = {
 };
 const DEFAULT_COLORMAP = "Magma";
 const COLORMAP_KEY = "audiovis.colormap";
+const GAMMA_KEY = "audiovis.gamma";
+const RAMP_STOPS = 17;
 const PLOT = { left: 52, right: 0, top: 0, bottom: 24 };
 const TICK_HERTZ = 10000;
 const TICK_SECONDS = 1;
@@ -54,7 +56,7 @@ registerProcessor("block-tap", BlockTap);
 `;
 
 const elements = Object.fromEntries(
-  ["source", "seconds", "top", "colormap", "start", "stop", "plot", "prompt", "prompt-title",
+  ["source", "seconds", "top", "colormap", "gamma", "gamma-value", "start", "stop", "plot", "prompt", "prompt-title",
     "prompt-detail", "status", "ramp", "setup", "setup-os", "setup-browser", "guide"]
     .map((id) => [id, document.getElementById(id)]),
 );
@@ -280,6 +282,7 @@ class SpectrogramView {
     this.canvas = canvas;
     this.context = canvas.getContext("2d");
     this.palette = null;
+    this.curve = gammaCurve(1);
     this.ink = "#ffffff";
     this.image = document.createElement("canvas");
     this.imageContext = this.image.getContext("2d");
@@ -314,7 +317,8 @@ class SpectrogramView {
     const levels = model.column(index);
     const pixels = this.strip.data;
     for (let bin = 0; bin < BINS; bin += 1) {
-      const level = Math.round(Math.min(Math.max((levels[bin] - FLOOR_DB) / -FLOOR_DB, 0), 1) * 255);
+      const position = Math.min(Math.max((levels[bin] - FLOOR_DB) / -FLOOR_DB, 0), 1);
+      const level = this.curve[Math.round(position * (CURVE_SIZE - 1))];
       const offset = (BINS - 1 - bin) * 4;
       pixels[offset] = this.palette[level * 3];
       pixels[offset + 1] = this.palette[level * 3 + 1];
@@ -427,24 +431,41 @@ function applyColormap(name) {
     root.style.setProperty(token, cssColor(color));
   }
   root.style.colorScheme = dark ? "dark" : "light";
-  root.style.setProperty("--ramp", `linear-gradient(to right, ${colors.join(", ")})`);
   document.querySelector('meta[name="theme-color"]').content = cssColor(background);
   view.setColors(palette, cssColor(tokens["--muted"]));
+  renderRamp();
   view.clear(model);
 }
 
-function savedColormap() {
+// The slider is logarithmic: gamma is 2 to its value, so 0.5 and 2 sit evenly around 1.
+function applyGamma() {
+  const gamma = 2 ** Number(elements.gamma.value);
+  view.curve = gammaCurve(gamma);
+  elements["gamma-value"].textContent = gamma.toFixed(2);
+  renderRamp();
+  view.clear(model);
+}
+
+// The legend shows the same mapping as the plot, from -90 to 0 dBFS.
+function renderRamp() {
+  const stops = Array.from({ length: RAMP_STOPS }, (_, stop) => {
+    const level = view.curve[Math.round((stop / (RAMP_STOPS - 1)) * (CURVE_SIZE - 1))];
+    return cssColor(view.palette.subarray(level * 3, level * 3 + 3));
+  });
+  document.documentElement.style.setProperty("--ramp", `linear-gradient(to right, ${stops.join(", ")})`);
+}
+
+function readSetting(key) {
   try {
-    const saved = localStorage.getItem(COLORMAP_KEY);
-    return Object.hasOwn(COLORMAPS, saved) ? saved : DEFAULT_COLORMAP;
+    return localStorage.getItem(key);
   } catch {
-    return DEFAULT_COLORMAP;
+    return null;
   }
 }
 
-function saveColormap(name) {
+function saveSetting(key, value) {
   try {
-    localStorage.setItem(COLORMAP_KEY, name);
+    localStorage.setItem(key, value);
   } catch {
     // The choice just won't survive a reload.
   }
@@ -772,15 +793,27 @@ elements.seconds.addEventListener("change", () => {
 elements.top.addEventListener("change", () => { view.dirty = true; });
 elements.colormap.addEventListener("change", () => {
   applyColormap(elements.colormap.value);
-  saveColormap(elements.colormap.value);
+  saveSetting(COLORMAP_KEY, elements.colormap.value);
+});
+elements.gamma.addEventListener("input", () => {
+  applyGamma();
+  saveSetting(GAMMA_KEY, elements.gamma.value);
+});
+elements.gamma.addEventListener("dblclick", () => {
+  elements.gamma.value = 0;
+  applyGamma();
+  saveSetting(GAMMA_KEY, elements.gamma.value);
 });
 elements["setup-os"].addEventListener("change", renderGuide);
 elements["setup-browser"].addEventListener("change", renderGuide);
 navigator.mediaDevices?.addEventListener?.("devicechange", refreshDevices);
 
 elements.colormap.replaceChildren(...Object.keys(COLORMAPS).map((name) => new Option(name, name)));
-elements.colormap.value = savedColormap();
+const savedColormap = readSetting(COLORMAP_KEY);
+elements.colormap.value = Object.hasOwn(COLORMAPS, savedColormap) ? savedColormap : DEFAULT_COLORMAP;
 applyColormap(elements.colormap.value);
+elements.gamma.value = readSetting(GAMMA_KEY) ?? 0;
+applyGamma();
 elements["setup-os"].value = platform.os;
 elements["setup-browser"].value = platform.browser;
 elements["prompt-detail"].textContent = canShareAudio
