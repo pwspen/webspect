@@ -8,14 +8,38 @@ const BINS = FFT_SIZE / 2 + 1;
 const FLOOR_AMPLITUDE = 10 ** (FLOOR_DB / 20);
 const CURVE_SIZE = 4096;
 
-// Maps a level from 0 to 1 onto a palette index. Below 1 lifts quiet detail; above 1 sinks it.
-// Fine steps keep a low gamma from jumping away from the floor color.
-function gammaCurve(gamma) {
-  const curve = new Uint8Array(CURVE_SIZE);
+// The histogram and curve index levels in fine steps from the floor to full scale.
+function curveStep(level) {
+  return Math.round(Math.min(Math.max((level - FLOOR_DB) / -FLOOR_DB, 0), 1) * (CURVE_SIZE - 1));
+}
+
+// Maps levels onto palette indexes, like softmax temperature: sharpness moves the same total
+// between an even spread (below 1) and the peaks (above 1). A power curve alone would dim or
+// brighten everything, so a gain restores the histogram's mean. Silence is unaffected.
+function sharpnessCurve(histogram, sharpness) {
+  const shaped = new Float64Array(CURVE_SIZE);
+  let target = 0;
   for (let step = 0; step < CURVE_SIZE; step += 1) {
-    curve[step] = Math.round((step / (CURVE_SIZE - 1)) ** gamma * 255);
+    const position = step / (CURVE_SIZE - 1);
+    shaped[step] = position ** sharpness;
+    target += histogram[step] * position;
   }
-  return curve;
+  const total = (gain) => {
+    let sum = 0;
+    for (let step = 0; step < CURVE_SIZE; step += 1) {
+      sum += histogram[step] * Math.min(1, gain * shaped[step]);
+    }
+    return sum;
+  };
+  let low = -20;
+  let high = 40;
+  for (let round = 0; round < 40; round += 1) {
+    const middle = (low + high) / 2;
+    if (total(2 ** middle) < target) low = middle;
+    else high = middle;
+  }
+  const gain = target > 0 ? 2 ** ((low + high) / 2) : 1;
+  return Uint8Array.from(shaped, (value) => Math.round(Math.min(1, gain * value) * 255));
 }
 
 // Overlapping Hann-window FFTs, normalized to peak amplitude in dBFS.
@@ -149,5 +173,7 @@ function reverseBits(value, bits) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { Spectrogram, gammaCurve, FLOOR_DB, FFT_SIZE, HOP_SIZE, BINS, CURVE_SIZE };
+  module.exports = {
+    Spectrogram, curveStep, sharpnessCurve, FLOOR_DB, FFT_SIZE, HOP_SIZE, BINS, CURVE_SIZE,
+  };
 }

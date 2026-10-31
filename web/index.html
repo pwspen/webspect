@@ -76,7 +76,7 @@ button.primary:hover:not(:disabled) { background: var(--accent); filter: brightn
 .knobs { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .knob {
   display: grid;
-  grid-template-columns: 3.4em 88px 3.9em;
+  grid-template-columns: 5.2em 88px 3.9em;
   align-items: center;
   gap: 6px;
   font-size: 13px;
@@ -178,10 +178,10 @@ canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%
       <select id="colormap" title="Colormap"></select>
     </div>
     <div class="knobs">
-      <div class="knob" title="Lower lifts quiet detail, higher keeps only the strongest sound. Double-click to reset.">
-        <label for="gamma">Gamma</label>
-        <input id="gamma" type="range" min="-2" max="2" step="0.05" value="0">
-        <output id="gamma-value" for="gamma">1.00</output>
+      <div class="knob" title="Keeps total brightness constant. Lower spreads it evenly, higher gathers it into the peaks. Double-click to reset.">
+        <label for="sharpness">Sharpness</label>
+        <input id="sharpness" type="range" min="-3" max="3" step="0.05" value="0">
+        <output id="sharpness-value" for="sharpness">1.00</output>
       </div>
       <div class="knob" title="How much history the plot shows.">
         <label for="seconds">Time</label>

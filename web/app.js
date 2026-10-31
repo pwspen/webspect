@@ -13,7 +13,9 @@ const COLORMAPS = {
 };
 const DEFAULT_COLORMAP = "Magma";
 const COLORMAP_KEY = "audiovis.colormap";
-const GAMMA_KEY = "audiovis.gamma";
+const SHARPNESS_KEY = "audiovis.sharpness";
+const MEASURE_INTERVAL_MS = 250;
+const MEASURE_BUDGET = 20;
 const RAMP_STOPS = 17;
 const SECONDS_KEY = "audiovis.seconds";
 const TOP_KEY = "audiovis.top";
@@ -57,7 +59,7 @@ registerProcessor("block-tap", BlockTap);
 `;
 
 const elements = Object.fromEntries(
-  ["source", "seconds", "seconds-value", "top", "top-value", "colormap", "gamma", "gamma-value", "start", "stop", "plot", "prompt", "prompt-title",
+  ["source", "seconds", "seconds-value", "top", "top-value", "colormap", "sharpness", "sharpness-value", "start", "stop", "plot", "prompt", "prompt-title",
     "prompt-detail", "status", "ramp", "setup", "setup-os", "setup-browser", "guide"]
     .map((id) => [id, document.getElementById(id)]),
 );
@@ -288,7 +290,12 @@ class SpectrogramView {
     this.canvas = canvas;
     this.context = canvas.getContext("2d");
     this.palette = null;
-    this.curve = gammaCurve(1);
+    this.sharpness = 1;
+    this.histogram = new Uint32Array(CURVE_SIZE);
+    this.curve = sharpnessCurve(this.histogram, this.sharpness);
+    this.stale = true;
+    this.measured = 0;
+    this.nextMeasure = 0;
     this.ink = "#ffffff";
     this.image = document.createElement("canvas");
     this.imageContext = this.image.getContext("2d");
@@ -317,14 +324,39 @@ class SpectrogramView {
     this.imageContext.fillRect(0, 0, model.columns, BINS);
     this.drawn = 0;
     this.dirty = true;
+    this.stale = true;
+  }
+
+  // Exposure follows what is on screen, which means recoloring the whole history. Each pass
+  // sets the wait for the next one, so a long history can't take over the frame.
+  remeasure(model, top) {
+    const started = performance.now();
+    const due = this.sharpness !== 1 && model.total !== this.measured && started >= this.nextMeasure;
+    if (!this.stale && !due) return;
+    this.histogram.fill(0);
+    const visibleBins = Math.min(BINS, Math.floor(top / (model.sampleRate / FFT_SIZE)) + 1);
+    const count = Math.min(model.total, model.columns);
+    for (let age = 0; age < count; age += 1) {
+      const levels = model.column(model.total - count + age);
+      for (let bin = 0; bin < visibleBins; bin += 1) {
+        this.histogram[curveStep(levels[bin])] += 1;
+      }
+    }
+    this.curve = sharpnessCurve(this.histogram, this.sharpness);
+    this.drawn = 0;
+    this.dirty = true;
+    this.stale = false;
+    this.measured = model.total;
+    renderRamp();
+    const elapsed = performance.now() - started;
+    this.nextMeasure = started + Math.max(MEASURE_INTERVAL_MS, elapsed * MEASURE_BUDGET);
   }
 
   writeColumn(model, index) {
     const levels = model.column(index);
     const pixels = this.strip.data;
     for (let bin = 0; bin < BINS; bin += 1) {
-      const position = Math.min(Math.max((levels[bin] - FLOOR_DB) / -FLOOR_DB, 0), 1);
-      const level = this.curve[Math.round(position * (CURVE_SIZE - 1))];
+      const level = this.curve[curveStep(levels[bin])];
       const offset = (BINS - 1 - bin) * 4;
       pixels[offset] = this.palette[level * 3];
       pixels[offset + 1] = this.palette[level * 3 + 1];
@@ -336,6 +368,8 @@ class SpectrogramView {
 
   render(model, topFrequency) {
     if (model.total < this.drawn) this.clear(model);
+    const top = Math.min(topFrequency, model.sampleRate / 2);
+    this.remeasure(model, top);
     if (model.total === this.drawn && !this.dirty) return;
     for (let index = Math.max(this.drawn, model.total - model.columns); index < model.total; index += 1) {
       this.writeColumn(model, index);
@@ -349,8 +383,6 @@ class SpectrogramView {
     const plotWidth = width - PLOT.left - PLOT.right;
     const plotHeight = height - PLOT.top - PLOT.bottom;
     const context = this.context;
-    const nyquist = model.sampleRate / 2;
-    const top = Math.min(topFrequency, nyquist);
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
 
@@ -363,11 +395,13 @@ class SpectrogramView {
     const older = model.columns - head;
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = "high";
+    // Joining on a device pixel keeps the two slices from showing a hairline between them.
+    const split = Math.round((PLOT.left + older * scale) * ratio) / ratio;
     context.drawImage(this.image, head, sourceY, older, sourceHeight,
-      PLOT.left, PLOT.top, older * scale, plotHeight);
+      PLOT.left, PLOT.top, split - PLOT.left, plotHeight);
     if (head > 0) {
       context.drawImage(this.image, 0, sourceY, head, sourceHeight,
-        PLOT.left + older * scale, PLOT.top, head * scale, plotHeight);
+        split, PLOT.top, PLOT.left + plotWidth - split, plotHeight);
     }
 
     context.font = "11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
@@ -449,13 +483,11 @@ function applyColormap(name) {
   view.clear(model);
 }
 
-// The slider is logarithmic: gamma is 2 to its value, so 0.5 and 2 sit evenly around 1.
-function applyGamma() {
-  const gamma = 2 ** Number(elements.gamma.value);
-  view.curve = gammaCurve(gamma);
-  elements["gamma-value"].textContent = gamma.toFixed(2);
-  renderRamp();
-  view.clear(model);
+// The slider is logarithmic: sharpness is 2 to its value, so 0.5 and 2 sit evenly around 1.
+function applySharpness() {
+  view.sharpness = 2 ** Number(elements.sharpness.value);
+  view.stale = true;
+  elements["sharpness-value"].textContent = view.sharpness.toFixed(2);
 }
 
 // The legend shows the same mapping as the plot, from -90 to 0 dBFS.
@@ -812,6 +844,7 @@ elements.seconds.addEventListener("input", () => {
 });
 elements.top.addEventListener("input", () => {
   view.dirty = true;
+  view.stale = true;
   showRanges();
   saveSetting(TOP_KEY, elements.top.value);
 });
@@ -819,14 +852,14 @@ elements.colormap.addEventListener("change", () => {
   applyColormap(elements.colormap.value);
   saveSetting(COLORMAP_KEY, elements.colormap.value);
 });
-elements.gamma.addEventListener("input", () => {
-  applyGamma();
-  saveSetting(GAMMA_KEY, elements.gamma.value);
+elements.sharpness.addEventListener("input", () => {
+  applySharpness();
+  saveSetting(SHARPNESS_KEY, elements.sharpness.value);
 });
-elements.gamma.addEventListener("dblclick", () => {
-  elements.gamma.value = 0;
-  applyGamma();
-  saveSetting(GAMMA_KEY, elements.gamma.value);
+elements.sharpness.addEventListener("dblclick", () => {
+  elements.sharpness.value = 0;
+  applySharpness();
+  saveSetting(SHARPNESS_KEY, elements.sharpness.value);
 });
 elements["setup-os"].addEventListener("change", renderGuide);
 elements["setup-browser"].addEventListener("change", renderGuide);
@@ -840,8 +873,8 @@ showRanges();
 const savedColormap = readSetting(COLORMAP_KEY);
 elements.colormap.value = Object.hasOwn(COLORMAPS, savedColormap) ? savedColormap : DEFAULT_COLORMAP;
 applyColormap(elements.colormap.value);
-elements.gamma.value = readSetting(GAMMA_KEY) ?? 0;
-applyGamma();
+elements.sharpness.value = readSetting(SHARPNESS_KEY) ?? 0;
+applySharpness();
 elements["setup-os"].value = platform.os;
 elements["setup-browser"].value = platform.browser;
 elements["prompt-detail"].textContent = canShareAudio
