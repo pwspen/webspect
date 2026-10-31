@@ -1,15 +1,27 @@
 "use strict";
 
-const VIRIDIS = [
-  "#440154", "#482878", "#3e4989", "#31688e", "#26828e",
-  "#1f9e89", "#35b779", "#6ece58", "#b5de2b", "#fde725",
-];
-const PLOT = { left: 62, right: 86, top: 10, bottom: 36, bar: 14 };
+// Each map runs from silence to full scale. The first color is also the page background.
+const COLORMAPS = {
+  Magma: ["#000004", "#180f3e", "#451077", "#721f81", "#9e2f7f", "#cd4071", "#f1605d", "#fd9668", "#feca8d", "#fcfdbf"],
+  Inferno: ["#000004", "#1b0c42", "#4b0c6b", "#781c6d", "#a52c60", "#cf4446", "#ed6925", "#fb9a06", "#f7d03c", "#fcffa4"],
+  Viridis: ["#440154", "#482878", "#3e4989", "#31688e", "#26828e", "#1f9e89", "#35b779", "#6ece58", "#b5de2b", "#fde725"],
+  Plasma: ["#0d0887", "#47039f", "#7301a8", "#9c179e", "#bd3786", "#d8576b", "#ed7953", "#fa9e3b", "#fdc926", "#f0f921"],
+  Cividis: ["#00204d", "#00336f", "#39486b", "#575c6d", "#707173", "#8a8779", "#a69d75", "#c4b56c", "#e4cf5b", "#ffea46"],
+  Turbo: ["#30123b", "#4662d7", "#36aaf9", "#1ae4b6", "#72fe5e", "#c8ef34", "#faba39", "#f66b19", "#cb2a04", "#7a0403"],
+  Grayscale: ["#000000", "#ffffff"],
+  Paper: ["#ffffff", "#000000"],
+};
+const DEFAULT_COLORMAP = "Magma";
+const COLORMAP_KEY = "audiovis.colormap";
+const PLOT = { left: 52, right: 0, top: 0, bottom: 24 };
+const TICK_HERTZ = 10000;
+const TICK_SECONDS = 1;
 const LOOPBACK = /blackhole|soundflower|loopback|monitor of|stereo mix|what u hear|cable output|vb-audio|computer audio/i;
 const SHARED_DEVICE_IDS = new Set(["default", "communications"]);
 const CAPTURE_RATE = 48000;
 const SILENCE_LEVEL = 1e-5;
 const SILENCE_SECONDS = 3;
+const GAP_NOTICE_MS = 5000;
 
 // Mixes to mono and batches render quanta. The frame counter exposes gaps in capture.
 const TAP_WORKLET = `
@@ -42,8 +54,9 @@ registerProcessor("block-tap", BlockTap);
 `;
 
 const elements = Object.fromEntries(
-  ["source", "seconds", "top", "start", "stop", "plot", "prompt", "prompt-title", "prompt-detail",
-    "status", "setup", "setup-os", "setup-browser", "guide"].map((id) => [id, document.getElementById(id)]),
+  ["source", "seconds", "top", "colormap", "start", "stop", "plot", "prompt", "prompt-title",
+    "prompt-detail", "status", "ramp", "setup", "setup-os", "setup-browser", "guide"]
+    .map((id) => [id, document.getElementById(id)]),
 );
 
 // Shown to the user as-is, with the setup guide brought into view.
@@ -219,8 +232,37 @@ class AudioCapture {
 
 // Drawing
 
-function buildPalette() {
-  const stops = VIRIDIS.map((hex) => [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16)));
+function parseColor(hex) {
+  return [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16));
+}
+
+function cssColor([red, green, blue]) {
+  return `rgb(${Math.round(red)} ${Math.round(green)} ${Math.round(blue)})`;
+}
+
+function mixColors(from, to, amount) {
+  return from.map((channel, index) => channel + (to[index] - channel) * amount);
+}
+
+function luminance(color) {
+  const [red, green, blue] = color.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrast(first, second) {
+  const [low, high] = [luminance(first), luminance(second)].sort((a, b) => a - b);
+  return (high + 0.05) / (low + 0.05);
+}
+
+function strongest(background, candidates) {
+  return candidates.reduce((best, color) => (contrast(background, color) > contrast(background, best) ? color : best));
+}
+
+function buildPalette(colors) {
+  const stops = colors.map(parseColor);
   const palette = new Uint8ClampedArray(256 * 3);
   for (let level = 0; level < 256; level += 1) {
     const position = (level / 255) * (stops.length - 1);
@@ -233,35 +275,23 @@ function buildPalette() {
   return palette;
 }
 
-function niceStep(span, count) {
-  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000];
-  return steps.find((step) => span / step <= count) ?? steps[steps.length - 1];
-}
-
-function formatFrequency(hertz) {
-  return hertz >= 1000 ? `${hertz / 1000} kHz` : `${hertz} Hz`;
-}
-
 class SpectrogramView {
   constructor(canvas) {
     this.canvas = canvas;
     this.context = canvas.getContext("2d");
-    this.palette = buildPalette();
+    this.palette = null;
+    this.ink = "#ffffff";
     this.image = document.createElement("canvas");
     this.imageContext = this.image.getContext("2d");
     this.strip = new ImageData(1, BINS);
     this.drawn = 0;
     this.dirty = true;
-    this.colorBar = document.createElement("canvas");
-    this.colorBar.width = 1;
-    this.colorBar.height = 256;
-    const bar = this.colorBar.getContext("2d");
-    for (let level = 0; level < 256; level += 1) {
-      const [red, green, blue] = this.palette.subarray(level * 3, level * 3 + 3);
-      bar.fillStyle = `rgb(${red} ${green} ${blue})`;
-      bar.fillRect(0, 255 - level, 1, 1);
-    }
     new ResizeObserver(() => this.resize()).observe(canvas);
+  }
+
+  setColors(palette, ink) {
+    this.palette = palette;
+    this.ink = ink;
   }
 
   resize() {
@@ -274,8 +304,7 @@ class SpectrogramView {
   clear(model) {
     this.image.width = model.columns;
     this.image.height = BINS;
-    const [red, green, blue] = this.palette.subarray(0, 3);
-    this.imageContext.fillStyle = `rgb(${red} ${green} ${blue})`;
+    this.imageContext.fillStyle = cssColor(this.palette.subarray(0, 3));
     this.imageContext.fillRect(0, 0, model.columns, BINS);
     this.drawn = 0;
     this.dirty = true;
@@ -323,6 +352,7 @@ class SpectrogramView {
     const scale = plotWidth / model.columns;
     const older = model.columns - head;
     context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
     context.drawImage(this.image, head, sourceY, older, sourceHeight,
       PLOT.left, PLOT.top, older * scale, plotHeight);
     if (head > 0) {
@@ -330,40 +360,25 @@ class SpectrogramView {
         PLOT.left + older * scale, PLOT.top, head * scale, plotHeight);
     }
 
-    context.font = "12px ui-monospace, SF Mono, Menlo, Consolas, monospace";
-    context.fillStyle = "#dce4ef";
-    context.strokeStyle = "#94a2b6";
+    context.font = "11px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+    context.fillStyle = this.ink;
+    context.strokeStyle = this.ink;
     context.lineWidth = 1;
 
-    context.textAlign = "right";
-    context.textBaseline = "middle";
-    const frequencyStep = niceStep(top, Math.max(2, Math.floor(plotHeight / 46)));
-    for (let frequency = 0; frequency <= top; frequency += frequencyStep) {
-      const y = PLOT.top + plotHeight * (1 - frequency / top);
+    if (TICK_HERTZ <= top) {
+      const y = PLOT.top + plotHeight * (1 - TICK_HERTZ / top);
+      context.textAlign = "right";
+      context.textBaseline = "middle";
       this.tick(PLOT.left - 5, y, PLOT.left, y);
-      context.fillText(formatFrequency(frequency), PLOT.left - 8, y);
+      context.fillText(`${TICK_HERTZ / 1000} kHz`, PLOT.left - 8, y);
     }
-
-    context.textAlign = "center";
-    context.textBaseline = "top";
-    const seconds = model.duration;
-    const timeStep = niceStep(seconds, Math.max(2, Math.floor(plotWidth / 70)));
-    for (let age = 0; age <= seconds; age += timeStep) {
-      const x = PLOT.left + plotWidth * (1 - age / seconds);
+    if (TICK_SECONDS <= model.duration) {
+      const x = PLOT.left + plotWidth * (1 - TICK_SECONDS / model.duration);
       const y = PLOT.top + plotHeight;
+      context.textAlign = "center";
+      context.textBaseline = "top";
       this.tick(x, y, x, y + 5);
-      context.fillText(age === 0 ? "now" : `−${age} s`, x, y + 8);
-    }
-
-    const barX = width - PLOT.right + 12;
-    context.imageSmoothingEnabled = true;
-    context.drawImage(this.colorBar, barX, PLOT.top, PLOT.bar, plotHeight);
-    context.textAlign = "left";
-    context.textBaseline = "middle";
-    for (let level = 0; level >= FLOOR_DB; level -= 30) {
-      const y = PLOT.top + plotHeight * (level / FLOOR_DB);
-      this.tick(barX + PLOT.bar, y, barX + PLOT.bar + 4, y);
-      context.fillText(level === 0 ? "0 dBFS" : `−${-level}`, barX + PLOT.bar + 7, y);
+      context.fillText(`−${TICK_SECONDS} s`, x, y + 8);
     }
   }
 
@@ -385,8 +400,55 @@ let generation = 0;
 let silentSamples = 0;
 let showingSilence = false;
 let liveMessage = "";
+let statusTimer = 0;
 const view = new SpectrogramView(elements.plot);
-view.clear(model);
+
+// Silence and the page share one color, so the plot has no visible edge.
+function applyColormap(name) {
+  const colors = COLORMAPS[name];
+  const palette = buildPalette(colors);
+  const background = Array.from(palette.subarray(0, 3));
+  const dark = luminance(background) < 0.4;
+  const foreground = dark ? [244, 246, 250] : [18, 18, 22];
+  const levels = Array.from({ length: 256 }, (_, level) => Array.from(palette.subarray(level * 3, level * 3 + 3)));
+  const accent = strongest(background, levels);
+  const tokens = {
+    "--bg": background,
+    "--fg": foreground,
+    "--muted": mixColors(background, foreground, 0.72),
+    "--panel": mixColors(background, foreground, 0.1),
+    "--line": mixColors(background, foreground, 0.24),
+    "--accent": accent,
+    "--accent-ink": strongest(accent, [[0, 0, 0], [255, 255, 255]]),
+    "--bad": strongest(background, [[255, 180, 166], [160, 30, 20]]),
+  };
+  const root = document.documentElement;
+  for (const [token, color] of Object.entries(tokens)) {
+    root.style.setProperty(token, cssColor(color));
+  }
+  root.style.colorScheme = dark ? "dark" : "light";
+  root.style.setProperty("--ramp", `linear-gradient(to right, ${colors.join(", ")})`);
+  document.querySelector('meta[name="theme-color"]').content = cssColor(background);
+  view.setColors(palette, cssColor(tokens["--muted"]));
+  view.clear(model);
+}
+
+function savedColormap() {
+  try {
+    const saved = localStorage.getItem(COLORMAP_KEY);
+    return Object.hasOwn(COLORMAPS, saved) ? saved : DEFAULT_COLORMAP;
+  } catch {
+    return DEFAULT_COLORMAP;
+  }
+}
+
+function saveColormap(name) {
+  try {
+    localStorage.setItem(COLORMAP_KEY, name);
+  } catch {
+    // The choice just won't survive a reload.
+  }
+}
 
 function setStatus(message, state = "idle") {
   elements.status.textContent = message;
@@ -431,7 +493,14 @@ async function refreshDevices() {
 function onBlock({ frame, samples }) {
   if (expectedFrame !== null && frame !== expectedFrame) {
     model.reset();
-    setStatus("Audio gap detected · history restarted");
+    // The audio clock often jumps once as a context starts, which is not worth a notice.
+    if (frame >= model.sampleRate) {
+      setStatus("Audio gap detected · history restarted");
+      clearTimeout(statusTimer);
+      statusTimer = setTimeout(() => {
+        if (capture && !showingSilence) setStatus(liveMessage, "live");
+      }, GAP_NOTICE_MS);
+    }
   }
   expectedFrame = frame + samples.length;
   model.push(samples);
@@ -457,6 +526,7 @@ function trackSilence(samples) {
 
 function stopCapture(message = "Stopped") {
   generation += 1;
+  clearTimeout(statusTimer);
   if (capture) capture.close();
   capture = null;
   setRunning(false);
@@ -479,6 +549,7 @@ function explain(error, source) {
 
 async function startCapture() {
   generation += 1;
+  clearTimeout(statusTimer);
   const current = generation;
   if (capture) capture.close();
   const source = selectedSource();
@@ -699,10 +770,17 @@ elements.seconds.addEventListener("change", () => {
   view.clear(model);
 });
 elements.top.addEventListener("change", () => { view.dirty = true; });
+elements.colormap.addEventListener("change", () => {
+  applyColormap(elements.colormap.value);
+  saveColormap(elements.colormap.value);
+});
 elements["setup-os"].addEventListener("change", renderGuide);
 elements["setup-browser"].addEventListener("change", renderGuide);
 navigator.mediaDevices?.addEventListener?.("devicechange", refreshDevices);
 
+elements.colormap.replaceChildren(...Object.keys(COLORMAPS).map((name) => new Option(name, name)));
+elements.colormap.value = savedColormap();
+applyColormap(elements.colormap.value);
 elements["setup-os"].value = platform.os;
 elements["setup-browser"].value = platform.browser;
 elements["prompt-detail"].textContent = canShareAudio
