@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Audiovis</title>
+<style>
+/* Layout: one instrument panel. The plot takes the screen, with controls above and setup below. */
+:root {
+  --bg: #10151e;
+  --panel: #171e2a;
+  --line: #2b3648;
+  --fg: #dce4ef;
+  --muted: #94a2b6;
+  --accent: #fde725;
+  --accent-ink: #1b1a05;
+  --good: #35b779;
+  --bad: #ff8f7a;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 var(--sans);
+  padding-block: 16px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { display: grid; gap: 14px; max-width: 1180px; margin-inline: auto; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+h1 { margin: 0; font-size: 20px; letter-spacing: 0.01em; }
+header p { margin: 0; color: var(--muted); font-size: 13px; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.field { display: grid; gap: 3px; min-width: 0; }
+.field.grow { flex: 1 1 260px; }
+label { color: var(--muted); font-size: 12px; letter-spacing: 0.02em; }
+select, button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+  max-width: 100%;
+  width: 100%;
+}
+button { width: auto; cursor: pointer; white-space: nowrap; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+:is(select, button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.plot { position: relative; height: clamp(320px, 62vh, 720px); }
+canvas { display: block; width: 100%; height: 100%; }
+.prompt {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  padding: 16px 90px 44px 70px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.prompt strong { display: block; color: var(--fg); font-size: 17px; font-weight: 600; }
+#status { min-height: 1.5em; margin: 0; font: 13px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+#status[data-state="live"] { color: var(--good); }
+#status[data-state="error"] { color: var(--bad); }
+
+#setup { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 18px; scroll-margin-top: 16px; }
+#setup h2 { margin: 0; font-size: 17px; text-wrap: balance; }
+.choices { display: flex; flex-wrap: wrap; gap: 10px; }
+.choices .field { flex: 0 1 200px; }
+.guide { display: grid; gap: 10px; max-width: 72ch; min-width: 0; }
+.guide p { margin: 0; }
+.guide .verdict { font-weight: 600; }
+.guide ol { margin: 0; padding-left: 1.5em; display: grid; gap: 8px; }
+.guide ol li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+.guide a { color: var(--accent); }
+.guide .note { color: var(--muted); font-size: 14px; }
+.command { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; min-width: 0; }
+.command code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: pre;
+  font: 13px/1.5 var(--mono);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+.downloads { display: flex; flex-wrap: wrap; gap: 10px; }
+.downloads a {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: 6px;
+  padding: 7px 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+@media (max-width: 560px) {
+  .prompt { padding-inline: 48px 56px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Audiovis</h1>
+    <p>Live spectrogram. Audio stays in this tab and is never saved.</p>
+  </header>
+
+  <section class="controls" aria-label="Capture controls">
+    <div class="field grow">
+      <label for="source">Audio source</label>
+      <select id="source"></select>
+    </div>
+    <div class="field">
+      <label for="seconds">History</label>
+      <select id="seconds">
+        <option value="5">5 s</option>
+        <option value="10" selected>10 s</option>
+        <option value="20">20 s</option>
+        <option value="30">30 s</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="top">Top frequency</label>
+      <select id="top">
+        <option value="4000">4 kHz</option>
+        <option value="8000">8 kHz</option>
+        <option value="12000">12 kHz</option>
+        <option value="20000" selected>20 kHz</option>
+        <option value="Infinity">Maximum</option>
+      </select>
+    </div>
+    <button id="start" class="primary" type="button">Start</button>
+    <button id="stop" type="button" disabled>Stop</button>
+  </section>
+
+  <div class="plot">
+    <canvas id="plot" role="img" aria-label="Scrolling spectrogram. Time runs left to right, with frequency increasing upward."></canvas>
+    <div id="prompt" class="prompt">
+      <p><strong id="prompt-title">Press Start to listen</strong><span id="prompt-detail"></span></p>
+    </div>
+  </div>
+  <p id="status" role="status">Stopped</p>
+
+  <section id="setup" aria-labelledby="setup-title">
+    <h2 id="setup-title">Set up computer audio</h2>
+    <div class="choices">
+      <div class="field">
+        <label for="setup-os">Computer</label>
+        <select id="setup-os">
+          <option value="mac">macOS</option>
+          <option value="windows">Windows</option>
+          <option value="linux">Linux</option>
+          <option value="mobile">Phone or tablet</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="setup-browser">Browser</label>
+        <select id="setup-browser">
+          <option value="chromium">Chrome or Edge</option>
+          <option value="firefox">Firefox</option>
+          <option value="safari">Safari</option>
+        </select>
+      </div>
+    </div>
+    <div id="guide" class="guide"></div>
+  </section>
+</main>
+<script src="spectrogram.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
