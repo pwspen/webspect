@@ -17,8 +17,7 @@ const SHARPNESS_KEY = "audiovis.sharpness";
 const WARP_KEY = "audiovis.warp";
 const CORNER_MIN = 20;
 const CORNER_MAX = 200000;
-const MEASURE_INTERVAL_MS = 250;
-const MEASURE_BUDGET = 20;
+const SWEEP_COLUMNS = 32;
 const RAMP_STOPS = 17;
 const SECONDS_KEY = "audiovis.seconds";
 const TOP_KEY = "audiovis.top";
@@ -297,8 +296,9 @@ class SpectrogramView {
     this.histogram = new Uint32Array(CURVE_SIZE);
     this.curve = sharpnessCurve(this.histogram, this.sharpness);
     this.stale = true;
-    this.measured = 0;
-    this.nextMeasure = 0;
+    this.sweepHistogram = new Uint32Array(CURVE_SIZE);
+    this.sweepIndex = 0;
+    this.sweepEnd = 0;
     this.ink = "#ffffff";
     this.image = document.createElement("canvas");
     this.imageContext = this.image.getContext("2d");
@@ -353,12 +353,9 @@ class SpectrogramView {
     this.stale = true;
   }
 
-  // Exposure follows what is on screen, which means recoloring the whole history. Each pass
-  // sets the wait for the next one, so a long history can't take over the frame.
+  // A change to the view recolors everything at once, so sliders respond immediately.
   remeasure(model) {
-    const started = performance.now();
-    const due = this.sharpness !== 1 && model.total !== this.measured && started >= this.nextMeasure;
-    if (!this.stale && !due) return;
+    if (!this.stale) return;
     this.histogram.fill(0);
     const count = Math.min(model.total, model.columns);
     for (let age = 0; age < count; age += 1) {
@@ -371,10 +368,33 @@ class SpectrogramView {
     this.drawn = 0;
     this.dirty = true;
     this.stale = false;
-    this.measured = model.total;
+    this.sweepHistogram.fill(0);
+    this.sweepIndex = 0;
+    this.sweepEnd = 0;
     renderRamp();
-    const elapsed = performance.now() - started;
-    this.nextMeasure = started + Math.max(MEASURE_INTERVAL_MS, elapsed * MEASURE_BUDGET);
+  }
+
+  // Exposure follows the audio, but recoloring the whole history in one frame makes the plot
+  // hitch. Each frame repaints a few columns and counts them, and a finished pass sets the curve.
+  sweep(model) {
+    if (this.sharpness === 1) return;
+    const oldest = Math.max(0, model.total - model.columns);
+    this.sweepIndex = Math.max(this.sweepIndex, oldest);
+    const start = this.sweepIndex;
+    const end = Math.min(this.sweepEnd, start + SWEEP_COLUMNS);
+    for (let index = start; index < end; index += 1) {
+      this.writeColumn(model, index, this.sweepHistogram);
+    }
+    this.sweepIndex = Math.max(start, end);
+    if (end > start) this.dirty = true;
+    if (this.sweepIndex < this.sweepEnd) return;
+    if (this.sweepEnd > 0) {
+      this.curve = sharpnessCurve(this.sweepHistogram, this.sharpness);
+      renderRamp();
+    }
+    this.sweepHistogram.fill(0);
+    this.sweepIndex = oldest;
+    this.sweepEnd = this.drawn;
   }
 
   // The loudest bin wins, so thin peaks survive when a row pools several bins.
@@ -387,11 +407,13 @@ class SpectrogramView {
     return level;
   }
 
-  writeColumn(model, index) {
+  writeColumn(model, index, histogram = null) {
     const levels = model.column(index);
     const pixels = this.strip.data;
     for (let row = 0; row < this.rows; row += 1) {
-      const level = this.curve[curveStep(this.rowLevel(levels, row))];
+      const step = curveStep(this.rowLevel(levels, row));
+      if (histogram) histogram[step] += 1;
+      const level = this.curve[step];
       const offset = row * 4;
       pixels[offset] = this.palette[level * 3];
       pixels[offset + 1] = this.palette[level * 3 + 1];
@@ -406,6 +428,7 @@ class SpectrogramView {
     const top = Math.min(topFrequency, model.sampleRate / 2);
     this.arrange(model, top);
     this.remeasure(model);
+    this.sweep(model);
     if (model.total === this.drawn && !this.dirty) return;
     for (let index = Math.max(this.drawn, model.total - model.columns); index < model.total; index += 1) {
       this.writeColumn(model, index);
