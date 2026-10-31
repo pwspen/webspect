@@ -896,7 +896,7 @@ elements.warp.addEventListener("input", () => {
   saveSetting(WARP_KEY, elements.warp.value);
 });
 elements.warp.addEventListener("dblclick", () => {
-  elements.warp.value = 0;
+  elements.warp.value = elements.warp.defaultValue;
   applyWarp();
   saveSetting(WARP_KEY, elements.warp.value);
 });
@@ -922,7 +922,7 @@ elements.sharpness.addEventListener("input", () => {
   saveSetting(SHARPNESS_KEY, elements.sharpness.value);
 });
 elements.sharpness.addEventListener("dblclick", () => {
-  elements.sharpness.value = 0;
+  elements.sharpness.value = elements.sharpness.defaultValue;
   applySharpness();
   saveSetting(SHARPNESS_KEY, elements.sharpness.value);
 });
@@ -939,9 +939,9 @@ showResolution();
 const savedColormap = readSetting(COLORMAP_KEY);
 elements.colormap.value = Object.hasOwn(COLORMAPS, savedColormap) ? savedColormap : DEFAULT_COLORMAP;
 applyColormap(elements.colormap.value);
-elements.sharpness.value = readSetting(SHARPNESS_KEY) ?? 0;
+elements.sharpness.value = readSetting(SHARPNESS_KEY) ?? elements.sharpness.defaultValue;
 applySharpness();
-elements.warp.value = readSetting(WARP_KEY) ?? 0;
+elements.warp.value = readSetting(WARP_KEY) ?? elements.warp.defaultValue;
 applyWarp();
 elements["setup-os"].value = platform.os;
 elements["setup-browser"].value = platform.browser;

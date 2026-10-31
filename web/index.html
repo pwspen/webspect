@@ -182,8 +182,8 @@ canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%
     <div class="knobs">
       <div class="knob" title="Keeps total brightness constant. Lower spreads it evenly, higher gathers it into the peaks. Double-click to reset.">
         <label for="sharpness">Sharpness</label>
-        <input id="sharpness" type="range" min="-3" max="3" step="0.05" value="0">
-        <output id="sharpness-value" for="sharpness">1.00</output>
+        <input id="sharpness" type="range" min="-3" max="3" step="0.005" value="0.485">
+        <output id="sharpness-value" for="sharpness">1.40</output>
       </div>
       <div class="knob" title="How much history the plot shows.">
         <label for="seconds">Time</label>
@@ -197,8 +197,8 @@ canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%
       </div>
       <div class="knob" title="Bends the frequency axis from linear towards log. The value is the corner: below it the axis is nearly linear, above it nearly log. 700 Hz is the mel scale. Double-click to reset.">
         <label for="warp">Warp</label>
-        <input id="warp" type="range" min="0" max="1" step="0.01" value="0">
-        <output id="warp-value" for="warp">Linear</output>
+        <input id="warp" type="range" min="0" max="1" step="0.005" value="0.325">
+        <output id="warp-value" for="warp">10 kHz</output>
       </div>
     </div>
   </header>
