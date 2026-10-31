@@ -507,9 +507,12 @@ function showRanges() {
 // One spectrogram cell spans a hop in time and an FFT bin in frequency.
 function showResolution() {
   const milliseconds = ((HOP_SIZE / model.sampleRate) * 1000).toFixed(1);
-  const hertz = (model.sampleRate / FFT_SIZE).toFixed(1);
-  elements.resolution.textContent = `${milliseconds} ms × ${hertz} Hz`;
-  elements.resolution.title = `Each pixel of the spectrogram covers ${milliseconds} ms of time and ${hertz} Hz of frequency.`;
+  const binWidth = model.sampleRate / FFT_SIZE;
+  const hertz = binWidth.toFixed(1);
+  const bandwidth = Math.min(Number(elements.top.value), model.sampleRate / 2);
+  const share = ((binWidth / bandwidth) * 100).toFixed(2);
+  elements.resolution.textContent = `${milliseconds} ms × ${hertz} Hz · ${share}% of bandwidth`;
+  elements.resolution.title = `Each pixel of the spectrogram covers ${milliseconds} ms of time and ${hertz} Hz of frequency, which is ${share}% of the ${formatFrequency(bandwidth)} shown.`;
 }
 
 function readSetting(key) {
@@ -855,6 +858,7 @@ elements.top.addEventListener("input", () => {
   view.dirty = true;
   view.stale = true;
   showRanges();
+  showResolution();
   saveSetting(TOP_KEY, elements.top.value);
 });
 elements.colormap.addEventListener("change", () => {
