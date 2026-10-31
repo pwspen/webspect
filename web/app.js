@@ -59,7 +59,7 @@ registerProcessor("block-tap", BlockTap);
 `;
 
 const elements = Object.fromEntries(
-  ["source", "seconds", "seconds-value", "top", "top-value", "colormap", "sharpness", "sharpness-value", "start", "stop", "plot", "prompt", "prompt-title",
+  ["resolution", "source", "seconds", "seconds-value", "top", "top-value", "colormap", "sharpness", "sharpness-value", "start", "stop", "plot", "prompt", "prompt-title",
     "prompt-detail", "status", "ramp", "setup", "setup-os", "setup-browser", "guide"]
     .map((id) => [id, document.getElementById(id)]),
 );
@@ -504,6 +504,14 @@ function showRanges() {
   elements["top-value"].textContent = formatFrequency(Number(elements.top.value));
 }
 
+// One spectrogram cell spans a hop in time and an FFT bin in frequency.
+function showResolution() {
+  const milliseconds = ((HOP_SIZE / model.sampleRate) * 1000).toFixed(1);
+  const hertz = (model.sampleRate / FFT_SIZE).toFixed(1);
+  elements.resolution.textContent = `${milliseconds} ms × ${hertz} Hz`;
+  elements.resolution.title = `Each pixel of the spectrogram covers ${milliseconds} ms of time and ${hertz} Hz of frequency.`;
+}
+
 function readSetting(key) {
   try {
     return localStorage.getItem(key);
@@ -658,6 +666,7 @@ async function startCapture() {
   view.clear(model);
   elements.top.max = next.sampleRate / 2;
   showRanges();
+  showResolution();
   silentSamples = 0;
   showingSilence = false;
   setRunning(true);
@@ -870,6 +879,7 @@ elements.seconds.value = readSetting(SECONDS_KEY) ?? elements.seconds.value;
 elements.top.value = readSetting(TOP_KEY) ?? elements.top.value;
 model = model.resized(Number(elements.seconds.value));
 showRanges();
+showResolution();
 const savedColormap = readSetting(COLORMAP_KEY);
 elements.colormap.value = Object.hasOwn(COLORMAPS, savedColormap) ? savedColormap : DEFAULT_COLORMAP;
 applyColormap(elements.colormap.value);
