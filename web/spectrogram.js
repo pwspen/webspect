@@ -1,4 +1,3 @@
-// Browser port of audiovis.Spectrogram. tests/test_web_spectrogram.py checks it against NumPy.
 "use strict";
 
 const FLOOR_DB = -90;
