@@ -1,10 +1,11 @@
 # Audiovis
 
 A live, scrolling spectrogram from computer audio or any input device, in any modern browser.
-`web/` is a dependency-free static page, so any static file server can host it:
+`web/` is a dependency-free static page, and `serve.py` hosts it on localhost using only
+the Python standard library:
 
 ```sh
-npx serve -l 8000 web
+python3 serve.py
 ```
 
 Open <http://localhost:8000>. Browsers only allow audio capture on `localhost` or over

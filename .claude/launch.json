@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "audiovis-web",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["--yes", "serve", "-l", "8000", "web"],
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["serve.py"],
       "port": 8000
     }
   ]
